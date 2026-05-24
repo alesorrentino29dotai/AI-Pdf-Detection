@@ -7,9 +7,20 @@ from pathlib import Path
 
 from ai_saw.models import DetectionReport
 
+
+def _ai_sentences(report: DetectionReport) -> list:
+    threshold = report.ai_sentence_threshold
+    return sorted(
+        [sentence for sentence in report.sentences if sentence.ai_score >= threshold],
+        key=lambda item: item.ai_score,
+        reverse=True,
+    )
+
+
 DISCLAIMER = (
     "Scores are probabilistic estimates, not proof of authorship. "
-    "Formal academic writing can resemble AI-generated text and may produce false positives."
+    "Formal academic writing can resemble AI-generated text and may produce false positives. "
+    "Sentences flagged below exceeded the AI probability threshold but may still be human-written."
 )
 
 
@@ -33,6 +44,23 @@ def report_to_dict(report: DetectionReport) -> dict:
 def write_json_report(report: DetectionReport, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report_to_dict(report), indent=2), encoding="utf-8")
+
+
+def write_ai_sentences_report(report: DetectionReport, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    flagged = _ai_sentences(report)
+    lines = [
+        f"Source: {report.source_path}",
+        f"Overall: {report.human_pct:.1f}% human / {report.ai_pct:.1f}% AI",
+        f"Threshold: {report.ai_sentence_threshold * 100:.0f}% AI probability",
+        f"Flagged sentences: {len(flagged)} of {len(report.sentences)}",
+        "",
+    ]
+    for index, sentence in enumerate(flagged, start=1):
+        lines.append(
+            f"{index}. [{sentence.section_name}] {sentence.ai_score * 100:.1f}% AI — {sentence.text}"
+        )
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def write_html_report(report: DetectionReport, output_path: Path) -> None:
@@ -74,6 +102,19 @@ def write_html_report(report: DetectionReport, output_path: Path) -> None:
             f"<strong>{html.escape(chunk.section_name)}</strong>, chunk {chunk.chunk_index + 1}: "
             f"{chunk.ai_score * 100:.1f}% AI"
             "</li>"
+        )
+
+    flagged_sentences = _ai_sentences(report)
+    sentence_rows = []
+    for sentence in flagged_sentences:
+        color = _chunk_color(sentence.ai_score)
+        sentence_rows.append(
+            "<article class='sentence' style='border-left-color: "
+            f"{color}'>"
+            f"<div class='scores'><strong>{html.escape(sentence.section_name)}</strong> · "
+            f"{sentence.ai_score * 100:.1f}% AI · {sentence.word_count} words</div>"
+            f"<p>{html.escape(sentence.text)}</p>"
+            "</article>"
         )
 
     human_width = max(min(report.human_pct, 100.0), 0.0)
@@ -131,6 +172,14 @@ def write_html_report(report: DetectionReport, output_path: Path) -> None:
       margin-bottom: 0.35rem;
     }}
     .scores {{ color: #52606d; font-size: 0.95rem; margin-bottom: 0.35rem; }}
+    .sentence {{
+      background: white;
+      border: 1px solid #d9e2ec;
+      border-left-width: 6px;
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      margin-bottom: 0.85rem;
+    }}
     .disclaimer {{
       background: #fffbea;
       border: 1px solid #f6e05e;
@@ -168,6 +217,9 @@ def write_html_report(report: DetectionReport, output_path: Path) -> None:
     </tbody>
   </table>
 
+  <h2>AI-flagged sentences ({len(flagged_sentences)} of {len(report.sentences)}, threshold {report.ai_sentence_threshold * 100:.0f}%)</h2>
+  {"".join(sentence_rows) if sentence_rows else "<p>No sentences exceeded the threshold.</p>"}
+
   <h2>Top AI-like chunks</h2>
   <ul>
     {"".join(top_ai_lines)}
@@ -197,6 +249,11 @@ def write_reports(
         json_path = output_dir / "report.json"
         write_json_report(report, json_path)
         written["json"] = json_path
+
+    if "txt" in normalized_formats or "sentences" in normalized_formats:
+        txt_path = output_dir / "ai_sentences.txt"
+        write_ai_sentences_report(report, txt_path)
+        written["txt"] = txt_path
 
     if "html" in normalized_formats:
         html_path = output_dir / "report.html"

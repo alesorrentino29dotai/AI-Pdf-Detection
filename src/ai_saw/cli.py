@@ -4,10 +4,11 @@ from pathlib import Path
 
 import typer
 
-from ai_saw.detect import AIDetector, DEFAULT_MODEL_ID, detect_sections
+from ai_saw.detect import AIDetector, DEFAULT_AI_SENTENCE_THRESHOLD, DEFAULT_MODEL_ID, detect_sections
 from ai_saw.extract import extract_pdf
 from ai_saw.report import write_reports
 from ai_saw.segment import segment_document
+from ai_saw.sentence import assign_sections, split_sentences
 
 app = typer.Typer(help="Detect AI-generated text in PDF documents.")
 
@@ -41,6 +42,21 @@ def _print_summary(report) -> None:
                 f"{chunk.ai_score * 100:.1f}% AI"
             )
 
+    flagged = [s for s in report.sentences if s.ai_score >= report.ai_sentence_threshold]
+    if flagged:
+        typer.echo("")
+        typer.echo(
+            f"AI-flagged sentences ({len(flagged)} of {len(report.sentences)}, "
+            f"threshold {report.ai_sentence_threshold * 100:.0f}%):"
+        )
+        for sentence in sorted(flagged, key=lambda item: item.ai_score, reverse=True)[:10]:
+            preview = sentence.text if len(sentence.text) <= 120 else sentence.text[:117] + "..."
+            typer.echo(
+                f"  [{sentence.section_name}] {sentence.ai_score * 100:.1f}% — {preview}"
+            )
+        if len(flagged) > 10:
+            typer.echo(f"  ... and {len(flagged) - 10} more in ai_sentences.txt")
+
 
 @app.command()
 def main(
@@ -52,10 +68,10 @@ def main(
         help="Directory where reports will be written.",
     ),
     formats: str = typer.Option(
-        "html,json",
+        "html,json,txt",
         "--format",
         "-f",
-        help="Comma-separated report formats: html, json.",
+        help="Comma-separated report formats: html, json, txt.",
     ),
     device: str | None = typer.Option(
         None,
@@ -69,6 +85,13 @@ def main(
     ),
     chunk_words: int = typer.Option(400, help="Target words per chunk."),
     overlap_words: int = typer.Option(50, help="Word overlap between chunks."),
+    sentence_threshold: float = typer.Option(
+        DEFAULT_AI_SENTENCE_THRESHOLD,
+        "--sentence-threshold",
+        min=0.0,
+        max=1.0,
+        help="Flag sentences with AI probability above this value (0-1).",
+    ),
 ) -> None:
     """Analyze a PDF and estimate human vs AI-generated content."""
     if not pdf_path.exists():
@@ -90,8 +113,17 @@ def main(
     typer.echo(f"Loading model {model_id}...")
     detector = AIDetector(model_id=model_id, device=device)
 
-    typer.echo("Scoring chunks...")
-    report = detect_sections(sections, detector, document.source_path)
+    typer.echo("Scoring chunks and sentences...")
+    sentence_spans = assign_sections(split_sentences(document.text), sections)
+    typer.echo(f"Found {len(sentence_spans)} scorable sentences.")
+
+    report = detect_sections(
+        sections,
+        detector,
+        document.source_path,
+        sentence_spans=sentence_spans,
+        ai_sentence_threshold=sentence_threshold,
+    )
 
     report_dir = output / pdf_path.stem
     written = write_reports(report, report_dir, _parse_formats(formats))

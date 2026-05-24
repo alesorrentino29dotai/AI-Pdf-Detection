@@ -5,10 +5,19 @@ from collections import defaultdict
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from ai_saw.models import ChunkScore, DetectionReport, Section, SectionReport, TextChunk
+from ai_saw.models import (
+    ChunkScore,
+    DetectionReport,
+    Section,
+    SectionReport,
+    SentenceScore,
+    SentenceSpan,
+    TextChunk,
+)
 
 DEFAULT_MODEL_ID = "yuchuantian/AIGC_detector_env3"
 BATCH_SIZE = 8
+DEFAULT_AI_SENTENCE_THRESHOLD = 0.7
 
 
 def _resolve_device(device: str | None) -> torch.device:
@@ -78,10 +87,38 @@ def _aggregate_percentages(chunks: list[ChunkScore]) -> tuple[float, float]:
     return round(ai_pct, 2), round(human_pct, 2)
 
 
+def detect_sentences(
+    sentences: list[SentenceSpan],
+    detector: AIDetector,
+) -> list[SentenceScore]:
+    if not sentences:
+        return []
+
+    texts = [item.text for item in sentences]
+    ai_scores = detector.score_texts(texts)
+    scored: list[SentenceScore] = []
+    for index, (sentence, ai_score) in enumerate(zip(sentences, ai_scores, strict=True)):
+        scored.append(
+            SentenceScore(
+                section_name=sentence.section_name,
+                sentence_index=index,
+                text=sentence.text,
+                word_count=sentence.word_count,
+                ai_score=ai_score,
+                human_score=1.0 - ai_score,
+                start_char=sentence.start_char,
+                end_char=sentence.end_char,
+            )
+        )
+    return scored
+
+
 def detect_sections(
     sections: list[Section],
     detector: AIDetector,
     source_path: str,
+    sentence_spans: list[SentenceSpan] | None = None,
+    ai_sentence_threshold: float = DEFAULT_AI_SENTENCE_THRESHOLD,
 ) -> DetectionReport:
     all_chunks: list[TextChunk] = []
     for section in sections:
@@ -126,6 +163,11 @@ def detect_sections(
         )
 
     overall_ai_pct, overall_human_pct = _aggregate_percentages(scored_chunks)
+
+    scored_sentences: list[SentenceScore] = []
+    if sentence_spans:
+        scored_sentences = detect_sentences(sentence_spans, detector)
+
     return DetectionReport(
         source_path=source_path,
         total_words=sum(section.word_count for section in sections),
@@ -134,4 +176,6 @@ def detect_sections(
         confidence=_confidence_label(overall_ai_pct),
         sections=section_reports,
         chunks=scored_chunks,
+        sentences=scored_sentences,
+        ai_sentence_threshold=ai_sentence_threshold,
     )
