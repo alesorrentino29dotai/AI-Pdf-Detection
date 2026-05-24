@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-saw"
-version = "0.2.0"
-description = "Local AI vs human text detection for PDF documents with sentence-level flagging"
+version = "0.3.0"
+description = "Local AI vs human PDF text detection with academic calibration and sentence-level flagging"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,8 +16,16 @@ dependencies = [
     "accelerate>=0.30.0",
 ]
 
+[project.optional-dependencies]
+train = [
+    "datasets>=2.19.0",
+]
+
 [project.scripts]
 ai-saw = "ai_saw.cli:app"
+
+[tool.setuptools.package-data]
+ai_saw = ["data/*.json"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

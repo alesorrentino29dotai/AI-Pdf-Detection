@@ -4,7 +4,14 @@ from pathlib import Path
 
 import typer
 
-from ai_saw.detect import AIDetector, DEFAULT_AI_SENTENCE_THRESHOLD, DEFAULT_MODEL_ID, detect_sections
+from ai_saw.calibrate import load_calibrator
+from ai_saw.detect import (
+    ACADEMIC_AI_SENTENCE_THRESHOLD,
+    AIDetector,
+    DEFAULT_AI_SENTENCE_THRESHOLD,
+    DEFAULT_MODEL_ID,
+    detect_sections,
+)
 from ai_saw.extract import extract_pdf
 from ai_saw.report import write_reports
 from ai_saw.segment import segment_document
@@ -19,6 +26,7 @@ def _parse_formats(formats: str) -> list[str]:
 
 def _print_summary(report) -> None:
     typer.echo(f"Source: {report.source_path}")
+    typer.echo(f"Profile: {report.profile}")
     typer.echo(f"Words: {report.total_words:,}")
     typer.echo(
         f"Overall: {report.human_pct:.1f}% human / {report.ai_pct:.1f}% AI "
@@ -85,17 +93,44 @@ def main(
     ),
     chunk_words: int = typer.Option(400, help="Target words per chunk."),
     overlap_words: int = typer.Option(50, help="Word overlap between chunks."),
-    sentence_threshold: float = typer.Option(
-        DEFAULT_AI_SENTENCE_THRESHOLD,
+    sentence_threshold: float | None = typer.Option(
+        None,
         "--sentence-threshold",
         min=0.0,
         max=1.0,
         help="Flag sentences with AI probability above this value (0-1).",
     ),
+    profile: str = typer.Option(
+        "academic",
+        "--profile",
+        help="Detection profile: academic (recommended for papers) or general.",
+    ),
 ) -> None:
     """Analyze a PDF and estimate human vs AI-generated content."""
     if not pdf_path.exists():
         raise typer.BadParameter(f"PDF not found: {pdf_path}")
+
+    normalized_profile = profile.strip().lower()
+    if normalized_profile not in {"academic", "general"}:
+        raise typer.BadParameter("Profile must be 'academic' or 'general'.")
+
+    calibrator = load_calibrator() if normalized_profile == "academic" else None
+    if normalized_profile == "academic" and calibrator is None:
+        typer.echo(
+            "Warning: academic calibrator not found; run "
+            "'python scripts/academic_tools.py build-calibrator' first. "
+            "Falling back to general scoring.",
+            err=True,
+        )
+        normalized_profile = "general"
+
+    effective_threshold = sentence_threshold
+    if effective_threshold is None:
+        effective_threshold = (
+            ACADEMIC_AI_SENTENCE_THRESHOLD
+            if normalized_profile == "academic"
+            else DEFAULT_AI_SENTENCE_THRESHOLD
+        )
 
     typer.echo(f"Extracting text from {pdf_path}...")
     document = extract_pdf(pdf_path)
@@ -122,7 +157,8 @@ def main(
         detector,
         document.source_path,
         sentence_spans=sentence_spans,
-        ai_sentence_threshold=sentence_threshold,
+        ai_sentence_threshold=effective_threshold,
+        calibrator=calibrator,
     )
 
     report_dir = output / pdf_path.stem

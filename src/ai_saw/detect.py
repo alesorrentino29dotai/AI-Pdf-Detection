@@ -5,6 +5,7 @@ from collections import defaultdict
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+from ai_saw.calibrate import AcademicCalibrator
 from ai_saw.models import (
     ChunkScore,
     DetectionReport,
@@ -18,6 +19,13 @@ from ai_saw.models import (
 DEFAULT_MODEL_ID = "yuchuantian/AIGC_detector_env3"
 BATCH_SIZE = 8
 DEFAULT_AI_SENTENCE_THRESHOLD = 0.7
+ACADEMIC_AI_SENTENCE_THRESHOLD = 0.85
+
+
+def _apply_calibrator(scores: list[float], calibrator: AcademicCalibrator | None) -> list[float]:
+    if calibrator is None:
+        return scores
+    return [calibrator.adjust(score) for score in scores]
 
 
 def _resolve_device(device: str | None) -> torch.device:
@@ -32,6 +40,9 @@ def _ai_label_index(id2label: dict[int, str]) -> int:
     for index, label in id2label.items():
         normalized = label.lower()
         if any(token in normalized for token in ("ai", "fake", "machine", "generated", "chatgpt", "gpt")):
+            return int(index)
+    for index, label in id2label.items():
+        if label.lower() == "ai":
             return int(index)
     return max(id2label.keys())
 
@@ -90,12 +101,13 @@ def _aggregate_percentages(chunks: list[ChunkScore]) -> tuple[float, float]:
 def detect_sentences(
     sentences: list[SentenceSpan],
     detector: AIDetector,
+    calibrator: AcademicCalibrator | None = None,
 ) -> list[SentenceScore]:
     if not sentences:
         return []
 
     texts = [item.text for item in sentences]
-    ai_scores = detector.score_texts(texts)
+    ai_scores = _apply_calibrator(detector.score_texts(texts), calibrator)
     scored: list[SentenceScore] = []
     for index, (sentence, ai_score) in enumerate(zip(sentences, ai_scores, strict=True)):
         scored.append(
@@ -119,12 +131,13 @@ def detect_sections(
     source_path: str,
     sentence_spans: list[SentenceSpan] | None = None,
     ai_sentence_threshold: float = DEFAULT_AI_SENTENCE_THRESHOLD,
+    calibrator: AcademicCalibrator | None = None,
 ) -> DetectionReport:
     all_chunks: list[TextChunk] = []
     for section in sections:
         all_chunks.extend(section.chunks)
 
-    ai_scores = detector.score_texts([chunk.text for chunk in all_chunks])
+    ai_scores = _apply_calibrator(detector.score_texts([chunk.text for chunk in all_chunks]), calibrator)
     scored_chunks: list[ChunkScore] = []
     for chunk, ai_score in zip(all_chunks, ai_scores, strict=True):
         human_score = 1.0 - ai_score
@@ -166,7 +179,7 @@ def detect_sections(
 
     scored_sentences: list[SentenceScore] = []
     if sentence_spans:
-        scored_sentences = detect_sentences(sentence_spans, detector)
+        scored_sentences = detect_sentences(sentence_spans, detector, calibrator=calibrator)
 
     return DetectionReport(
         source_path=source_path,
@@ -178,4 +191,5 @@ def detect_sections(
         chunks=scored_chunks,
         sentences=scored_sentences,
         ai_sentence_threshold=ai_sentence_threshold,
+        profile="academic" if calibrator else "general",
     )

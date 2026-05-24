@@ -193,7 +193,7 @@ def write_html_report(report: DetectionReport, output_path: Path) -> None:
 <body>
   <h1>AI Detection Report</h1>
   <p class="meta">Source: {html.escape(report.source_path)}</p>
-  <p class="meta">Total words: {report.total_words:,} · Confidence: {html.escape(report.confidence)}</p>
+  <p class="meta">Profile: {html.escape(report.profile)} · Total words: {report.total_words:,} · Confidence: {html.escape(report.confidence)}</p>
 
   <h2>Overall</h2>
   <div class="summary-bar">

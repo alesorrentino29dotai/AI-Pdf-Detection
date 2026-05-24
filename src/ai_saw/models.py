@@ -93,3 +93,4 @@ class DetectionReport:
     chunks: list[ChunkScore] = field(default_factory=list)
     sentences: list[SentenceScore] = field(default_factory=list)
     ai_sentence_threshold: float = 0.7
+    profile: str = "general"
